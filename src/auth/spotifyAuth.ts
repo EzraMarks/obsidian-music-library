@@ -2,6 +2,7 @@ import { PluginManifest, requestUrl } from 'obsidian';
 import { SpotifyApi } from '@spotify/web-api-ts-sdk';
 import { ObsidianSpotifySettings } from '../settings';
 import ObsidianSpotify from '../main';
+import { fetchWithRetry } from '../utils';
 
 /**
  * Handles all Spotify authentication operations including OAuth flow, token refresh, and user management.
@@ -45,7 +46,7 @@ export class SpotifyAuth {
             const data = await response.json;
 
             console.log(`[${manifest.name}] Spotify Token Refreshed`);
-            this.plugin.spotifyApi = SpotifyApi.withAccessToken(settings.spotify_client_id, data);
+            this.plugin.spotifyApi = SpotifyApi.withAccessToken(settings.spotify_client_id, data, { fetch: fetchWithRetry });
             this.plugin.spotifyApi['authenticationStrategy'].refreshTokenAction = async () => { return; };
         } catch (error) {
             console.log(`[${manifest.name}] Waiting for internet to update token`);
@@ -169,7 +170,7 @@ export class SpotifyAuth {
      */
     initializeSpotifySDK(settings: ObsidianSpotifySettings): SpotifyApi | undefined {
         if (settings.spotify_access_token.access_token) {
-            const api = SpotifyApi.withAccessToken(settings.spotify_client_id, settings.spotify_access_token);
+            const api = SpotifyApi.withAccessToken(settings.spotify_client_id, settings.spotify_access_token, { fetch: fetchWithRetry });
             api['authenticationStrategy'].refreshTokenAction = async () => { return; };
             return api;
         } else {
