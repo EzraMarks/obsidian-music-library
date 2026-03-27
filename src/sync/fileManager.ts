@@ -180,7 +180,7 @@ export class FileManager {
     }
 
     async createPlaylistFile(playlist: Playlist): Promise<void> {
-        const fileName = this.buildSafeFileName(playlist.title);
+        const fileName = this.buildSafeFileName(playlist.title, playlist.owner);
 
         const file = await this.createFile(
             fileName,
