@@ -18,6 +18,24 @@ export interface Track extends MusicEntity {
     album: SimplifiedAlbum | null | undefined;
 }
 
+export interface Playlist extends MusicEntity {
+    /**
+     * Track list. Only populated by getPlaylistById / getPlaylistsById (full fetch).
+     * getSavedPlaylists returns lightweight Playlist objects without tracks — music_items is undefined.
+     */
+    music_items?: PlaylistItem[];
+    description?: string;
+    owner?: string;
+    isOwner?: boolean;
+}
+
+export interface PlaylistItem {
+    title?: string;
+    album?: string;
+    artists?: string[];
+    ids?: MusicIds;
+}
+
 export interface MusicEntity {
     title: string;
     ids: MusicIds;
@@ -45,3 +63,5 @@ export interface SimplifiedTrack {
 export type MusicIds = MusicIdsFrontmatter;
 
 export type MusicSources = MusicSourcesFrontmatter;
+
+export type InputPlaylist = Pick<Playlist, 'title' | 'description' | 'image'> & { music_items: PlaylistItem[] };

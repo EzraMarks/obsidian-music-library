@@ -42,19 +42,14 @@ export interface ObsidianSpotifySettings {
     tracks_path: string;
 
     /**
+     * The path where playlist notes will be stored (relative to base path).
+     */
+    playlists_path: string;
+
+    /**
      * The base path where local music files are stored.
      */
     local_music_files_path: string;
-
-    /**
-     * List of Spotify playlist IDs to sync tracks from (in addition to Liked Songs).
-     */
-    playlist_ids: string[];
-
-    /**
-     * Mapping of playlist IDs to their human-readable names.
-     */
-    playlist_names: Record<string, string>;
 
     /**
      * Whether to automatically sync on plugin load.
@@ -80,6 +75,11 @@ export interface ObsidianSpotifySettings {
      * Default frontmatter to include when creating new artist notes.
      */
     default_artist_frontmatter: string;
+
+    /**
+     * Default frontmatter to include when creating new playlist notes.
+     */
+    default_playlist_frontmatter: string;
 }
 
 /**
@@ -98,14 +98,14 @@ export const DEFAULT_SETTINGS: ObsidianSpotifySettings = {
     artists_path: 'Artists',
     albums_path: 'Albums',
     tracks_path: 'Tracks',
+    playlists_path: 'Playlists',
     local_music_files_path: '',
-    playlist_ids: [],
-    playlist_names: {},
     auto_sync_on_load: false,
     sync_on_app_foreground: false,
     default_track_frontmatter: '',
     default_album_frontmatter: '',
     default_artist_frontmatter: '',
+    default_playlist_frontmatter: '',
 }
 
 export class ObsidianSpotifySettingsTab extends PluginSettingTab {
@@ -296,6 +296,17 @@ export class ObsidianSpotifySettingsTab extends PluginSettingTab {
                 }));
 
         new Setting(containerEl)
+            .setName('Playlists Subfolder')
+            .setDesc('Subfolder name for playlist notes (relative to base path)')
+            .addText(text => text
+                .setPlaceholder('e.g., Playlists')
+                .setValue(this.plugin.settings.playlists_path)
+                .onChange(async (value) => {
+                    this.plugin.settings.playlists_path = value;
+                    await this.plugin.saveSettings();
+                }));
+
+        new Setting(containerEl)
             .setName('Local Music Files Path')
             .setDesc('The base folder where your local music files are stored (for linking to actual audio files)')
             .addText(text => text
@@ -330,29 +341,13 @@ export class ObsidianSpotifySettingsTab extends PluginSettingTab {
                     }
                 }));
 
-        // Track Sources Configuration
-        containerEl.createEl('h3', { text: 'Track Sources' });
-
-        containerEl.createDiv().innerHTML = `
-            <p><strong>Liked Songs</strong> are automatically synced from your Spotify library.</p>
-            <p>You can also add additional playlists to sync tracks from:</p>
-        `;
-
-        containerEl.createEl('h4', { text: 'Additional Playlists' });
-        containerEl.createDiv().innerHTML = `
-            <p>Find playlist IDs in Spotify URLs: <code>https://open.spotify.com/playlist/<strong>37i9dQZF1DXcBWIGoYBM5M</strong></code></p>
-        `;
-
-        // Display current playlists
-        const playlistContainer = containerEl.createDiv();
-        this.displayPlaylistSettings(playlistContainer);
-
         containerEl.createEl('h3', { text: 'Current Paths' });
         const pathsEl = containerEl.createDiv();
         pathsEl.innerHTML = `
 			<p><strong>Full Artists Path:</strong> <code>${this.plugin.settings.music_catalog_base_path}/${this.plugin.settings.artists_path}</code></p>
 			<p><strong>Full Albums Path:</strong> <code>${this.plugin.settings.music_catalog_base_path}/${this.plugin.settings.albums_path}</code></p>
 			<p><strong>Full Tracks Path:</strong> <code>${this.plugin.settings.music_catalog_base_path}/${this.plugin.settings.tracks_path}</code></p>
+			<p><strong>Full Playlists Path:</strong> <code>${this.plugin.settings.music_catalog_base_path}/${this.plugin.settings.playlists_path}</code></p>
 			${this.plugin.settings.local_music_files_path ? `<p><strong>Local Music Files:</strong> <code>${this.plugin.settings.local_music_files_path}</code></p>` : ''}
 		`;
 
@@ -420,6 +415,17 @@ mood:</code></pre>
                     await this.plugin.saveSettings();
                 }));
 
+        new Setting(containerEl)
+            .setName('Default Playlist Frontmatter')
+            .setDesc('Additional frontmatter to include when creating playlist notes')
+            .addTextArea(text => text
+                .setPlaceholder('tags:\n  - music/playlist')
+                .setValue(this.plugin.settings.default_playlist_frontmatter)
+                .onChange(async (value) => {
+                    this.plugin.settings.default_playlist_frontmatter = value;
+                    await this.plugin.saveSettings();
+                }));
+
         const noteEl = containerEl.createDiv();
         noteEl.style.marginTop = '20px';
         noteEl.style.padding = '10px';
@@ -430,93 +436,4 @@ mood:</code></pre>
         `;
     }
 
-    private displayPlaylistSettings(container: HTMLElement): void {
-        container.empty();
-
-        const playlistList = container.createDiv('playlist-list');
-
-        this.plugin.settings.playlist_ids.forEach((playlistId, index) => {
-            const playlistName = this.plugin.settings.playlist_names[playlistId] || playlistId;
-            const displayName = playlistName === playlistId ? 'Unknown Playlist' : playlistName;
-
-            const playlistSetting = new Setting(playlistList)
-                .setName(`${displayName}`)
-                .setDesc(`ID: ${playlistId}`)
-                .addText(text => text
-                    .setPlaceholder('Playlist ID (e.g., 37i9dQZF1DXcBWIGoYBM5M)')
-                    .setValue(playlistId)
-                    .onChange(async (value) => {
-                        const oldId = this.plugin.settings.playlist_ids[index];
-                        const newId = value.trim();
-
-                        // Update the ID
-                        this.plugin.settings.playlist_ids[index] = newId;
-
-                        // Remove old mapping and try to fetch new one
-                        if (oldId && oldId !== newId) {
-                            delete this.plugin.settings.playlist_names[oldId];
-                        }
-
-                        if (newId && newId !== oldId) {
-                            await this.fetchAndStorePlaylistName(newId);
-                        }
-
-                        await this.plugin.saveSettings();
-                        this.displayPlaylistSettings(container);
-                    }))
-                .addButton(button => button
-                    .setButtonText('Refresh Name')
-                    .onClick(async () => {
-                        if (playlistId.trim()) {
-                            await this.fetchAndStorePlaylistName(playlistId);
-                            await this.plugin.saveSettings();
-                            this.displayPlaylistSettings(container);
-                        }
-                    }))
-                .addButton(button => button
-                    .setButtonText('Remove')
-                    .setWarning()
-                    .onClick(async () => {
-                        const removedId = this.plugin.settings.playlist_ids[index];
-                        this.plugin.settings.playlist_ids.splice(index, 1);
-
-                        // Clean up the name mapping
-                        if (removedId) {
-                            delete this.plugin.settings.playlist_names[removedId];
-                        }
-
-                        await this.plugin.saveSettings();
-                        this.displayPlaylistSettings(container);
-                    }));
-        });
-
-        // Add new playlist button
-        new Setting(container)
-            .setName('Add Playlist')
-            .setDesc('Add a new playlist to sync tracks from (in addition to Liked Songs)')
-            .addButton(button => button
-                .setButtonText('Add Playlist')
-                .setCta()
-                .onClick(async () => {
-                    this.plugin.settings.playlist_ids.push('');
-                    await this.plugin.saveSettings();
-                    this.displayPlaylistSettings(container);
-                }));
-    }
-
-    private async fetchAndStorePlaylistName(playlistId: string): Promise<void> {
-        if (!playlistId.trim() || !this.plugin.spotifyApi) {
-            return;
-        }
-
-        try {
-            const playlist = await this.plugin.spotifyApi.playlists.getPlaylist(playlistId, 'US', 'name');
-            this.plugin.settings.playlist_names[playlistId] = playlist.name;
-            console.log(`Fetched playlist name: ${playlist.name} for ID: ${playlistId}`);
-        } catch (error) {
-            console.error(`Failed to fetch playlist name for ID ${playlistId}:`, error);
-            // Keep the ID as fallback
-            this.plugin.settings.playlist_names[playlistId] = playlistId;
-        }
-    }
 }

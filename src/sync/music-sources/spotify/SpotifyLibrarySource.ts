@@ -2,7 +2,7 @@ import { MusicLibraryQueryOptions, MusicLibrarySource } from "../MusicLibrarySou
 import { SpotifyApi } from '@spotify/web-api-ts-sdk';
 import type * as Spotify from '@spotify/web-api-ts-sdk';
 import { SpotifyUtils } from './SpotifyUtils';
-import { Album, Artist, Track, SimplifiedArtist, SimplifiedTrack, SimplifiedAlbum, MusicSources, MusicIds } from "src/sync/types";
+import { Album, Artist, InputPlaylist, Playlist, PlaylistItem, Track, SimplifiedArtist, SimplifiedTrack, SimplifiedAlbum, MusicSources, MusicIds } from "src/sync/types";
 import { moment } from 'obsidian';
 import { ObsidianSpotifySettings } from "src/settings";
 
@@ -15,6 +15,7 @@ export class SpotifyLibrarySource extends MusicLibrarySource {
     private readonly RECENT_SYNC_LIMIT: Spotify.MaxInt<50> = 20;
 
     private readonly utils: SpotifyUtils;
+    private cachedUserId?: string;
 
     constructor(
         private spotifyApi: SpotifyApi,
@@ -22,6 +23,14 @@ export class SpotifyLibrarySource extends MusicLibrarySource {
     ) {
         super();
         this.utils = new SpotifyUtils(this.settings);
+    }
+
+    private async getCurrentUserId(): Promise<string> {
+        if (!this.cachedUserId) {
+            const profile = await this.spotifyApi.currentUser.profile();
+            this.cachedUserId = profile.id;
+        }
+        return this.cachedUserId;
     }
 
     override async getSavedArtists(options: MusicLibraryQueryOptions): Promise<Artist[]> {
@@ -75,6 +84,24 @@ export class SpotifyLibrarySource extends MusicLibrarySource {
         return savedTracks.map(item => this.toTrack(item.track, moment(item.added_at)));
     }
 
+    override async getSavedPlaylists(options: MusicLibraryQueryOptions): Promise<Playlist[]> {
+        const [spotifyPlaylists, userId] = await Promise.all([
+            this.paginateSpotifyApi(
+                (offset) => this.spotifyApi.currentUser.playlists.playlists(this.API_PAGE_SIZE, offset)
+            ),
+            this.getCurrentUserId(),
+        ]);
+        return spotifyPlaylists.map(item => this.toPlaylist(item, [], userId));
+    }
+
+    override async getPlaylistsById(ids: string[]): Promise<Playlist[]> {
+        const playlists: Playlist[] = [];
+        for (const id of ids) {
+            playlists.push(await this.getPlaylistById(id));
+        }
+        return playlists;
+    }
+
     private async getRecentSavedTracks(): Promise<Spotify.SavedTrack[]> {
         const response = await this.spotifyApi.currentUser.tracks.savedTracks(this.RECENT_SYNC_LIMIT, 0);
         return response.items;
@@ -86,12 +113,14 @@ export class SpotifyLibrarySource extends MusicLibrarySource {
         );
     }
 
-    async getPlaylistTracks(playlistId: string, options: MusicLibraryQueryOptions): Promise<Track[]> {
+    private async getPlaylistTracks(playlistId: string, options: MusicLibraryQueryOptions = {}): Promise<Track[]> {
         const playlistTracks = options.recentOnly
             ? await this.getRecentPlaylistTracks(playlistId)
             : await this.getAllPlaylistTracks(playlistId);
 
-        return playlistTracks.map(item => this.toTrack(item.track, moment(item.added_at)));
+        return playlistTracks
+            .filter(item => item.track != null)
+            .map(item => this.toTrack(item.track, moment(item.added_at)));
     }
 
     private async getRecentPlaylistTracks(playlistId: string): Promise<Spotify.PlaylistedTrack<Spotify.Track>[]> {
@@ -149,6 +178,76 @@ export class SpotifyLibrarySource extends MusicLibrarySource {
         return ids.spotify_id;
     }
 
+    override isSourceImageUrl(url: string): boolean {
+        return url.includes('scdn.co') || url.includes('spotify.com');
+    }
+
+    override getPrimaryUrl(sources: MusicSources): string | undefined {
+        return sources.spotify;
+    }
+
+    override async getPlaylistById(playlistId: string): Promise<Playlist> {
+        const [playlist, tracks, userId] = await Promise.all([
+            this.spotifyApi.playlists.getPlaylist(playlistId),
+            this.getPlaylistTracks(playlistId),
+            this.getCurrentUserId(),
+        ]);
+        return this.toPlaylist(playlist, tracks, userId);
+    }
+
+    override async createPlaylist(playlist: InputPlaylist): Promise<Playlist> {
+        const userId = await this.getCurrentUserId();
+        const created = await this.spotifyApi.playlists.createPlaylist(userId, {
+            name: playlist.title,
+            description: playlist.description ?? '',
+            public: false,
+        });
+        const trackUris = this.playlistItemsToUris(playlist.music_items);
+        if (trackUris.length > 0) {
+            await this.replacePlaylistTracks(created.id, trackUris);
+        }
+        await this.uploadCoverImage(created.id, playlist.image);
+        return this.getPlaylistById(created.id);
+    }
+
+    override async updatePlaylist(playlistId: string, playlist: InputPlaylist): Promise<void> {
+        await this.spotifyApi.playlists.changePlaylistDetails(playlistId, {
+            name: playlist.title,
+            description: playlist.description ?? '',
+        });
+        await this.replacePlaylistTracks(playlistId, this.playlistItemsToUris(playlist.music_items));
+        await this.uploadCoverImage(playlistId, playlist.image);
+    }
+
+    private async uploadCoverImage(playlistId: string, imageUrl?: string): Promise<void> {
+        if (!imageUrl) return;
+        try {
+            const blob = await fetch(imageUrl).then(r => r.blob());
+            const base64 = await new Promise<string>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+                reader.readAsDataURL(blob);
+            });
+            await this.spotifyApi.playlists.addCustomPlaylistCoverImage(playlistId, base64);
+        } catch (err) {
+            console.warn('Failed to upload playlist cover image:', err);
+        }
+    }
+
+    private playlistItemsToUris(items: PlaylistItem[]): string[] {
+        return items
+            .map(item => item.ids?.spotify_uri)
+            .filter((uri): uri is string => !!uri);
+    }
+
+    private async replacePlaylistTracks(playlistId: string, trackUris: string[]): Promise<void> {
+        // PUT replaces all tracks; Spotify limit is 100 per request so send first batch then append the rest
+        await this.spotifyApi.playlists.updatePlaylistItems(playlistId, { uris: trackUris.slice(0, 100) });
+        for (let i = 100; i < trackUris.length; i += 100) {
+            await this.spotifyApi.playlists.addItemsToPlaylist(playlistId, trackUris.slice(i, i + 100));
+        }
+    }
+
     private toArtist(item: Spotify.Artist, addedAt: moment.Moment | undefined): Artist {
         return {
             title: item.name,
@@ -201,6 +300,25 @@ export class SpotifyLibrarySource extends MusicLibrarySource {
             sources: {
                 spotify: `https://open.spotify.com/track/${item.id}`
             }
+        };
+    }
+
+    private toPlaylist(item: Spotify.SimplifiedPlaylist, tracks: Track[], currentUserId: string): Playlist {
+        return {
+            title: item.name,
+            image: this.utils.getBestImageUrl(item.images),
+            ids: this.utils.getSpotifyIds(item),
+            description: item.description || undefined,
+            owner: item.owner?.display_name || item.owner?.id,
+            isOwner: item.owner?.id === currentUserId,
+            music_items: tracks.map(t => ({
+                title: t.title,
+                album: t.album?.title,
+                artists: t.artists.map(a => a.title),
+                ids: t.ids
+            })),
+            addedAt: undefined,
+            sources: { spotify: `https://open.spotify.com/playlist/${item.id}` }
         };
     }
 

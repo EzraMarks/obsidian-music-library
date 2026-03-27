@@ -1,5 +1,5 @@
 import { App, TFile } from 'obsidian';
-import { MusicIds, SimplifiedArtist, SimplifiedAlbum, Artist, Album, Track, MusicSources } from "./types";
+import { MusicIds, SimplifiedArtist, SimplifiedAlbum, Artist, Album, Playlist, Track, MusicSources } from "./types";
 import { MusicFrontmatter } from './frontmatterTypes';
 import { MusicFile } from './types';
 
@@ -49,6 +49,24 @@ export class FrontmatterReader {
             artists: this.parseArtistLinks(frontmatter.artists ?? []),
             album: frontmatter.album ? this.parseAlbumLink(frontmatter.album) : undefined,
             file: file
+        };
+    }
+
+    parsePlaylistFile(file: TFile): MusicFile<Playlist> | undefined {
+        const frontmatter = this.extractFrontmatter(file);
+        if (!frontmatter) {
+            return undefined;
+        }
+
+        return {
+            title: frontmatter.title ?? "",
+            ids: this.extractMusicIds(frontmatter),
+            sources: this.extractMusicSources(frontmatter),
+            image: frontmatter.cover,
+            description: frontmatter.description,
+            owner: frontmatter.owner,
+            music_items: frontmatter.music_items ?? [],
+            file
         };
     }
 
@@ -143,7 +161,7 @@ export class FrontmatterReader {
      * Resolve a markdown link to an actual TFile
      * [[path]] or [[path|alias]] -> TFile
      */
-    private resolveMarkdownLink(text: string): TFile | undefined {
+    resolveMarkdownLink(text: string): TFile | undefined {
         // Extract the path from markdown link syntax
         const linkMatch = text.match(/\[\[(.+?)(?:\|.+?)?\]\]/);
         if (!linkMatch) {
@@ -156,5 +174,13 @@ export class FrontmatterReader {
         const file = this.app.metadataCache.getFirstLinkpathDest(linkPath, '');
 
         return file instanceof TFile ? file : undefined;
+    }
+
+    resolveWikiLinkToIds(link: string): MusicIds | undefined {
+        if (!link.startsWith('[[')) return undefined;
+        const file = this.resolveMarkdownLink(link);
+        if (!file) return undefined;
+        const frontmatter = this.extractFrontmatter(file);
+        return frontmatter ? this.extractMusicIds(frontmatter) : undefined;
     }
 }

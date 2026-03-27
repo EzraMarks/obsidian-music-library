@@ -1,6 +1,6 @@
 import { ObsidianSpotifySettings } from "src/settings";
 import { MusicLibrarySource } from "./music-sources/MusicLibrarySource";
-import { Album, Artist, MusicEntity, Track } from "./types";
+import { Album, Artist, MusicEntity, Playlist, Track } from "./types";
 import { App } from "obsidian";
 import { LocalTrackManager } from "./LocalTrackManager";
 import { MusicIdIndex } from "./MusicIdIndex";
@@ -48,6 +48,13 @@ export class MusicMetadataEnricher {
         return this.enrichEntitiesWithMusicLibrarySource(
             tracks,
             (ids) => this.musicLibrarySource.getTracksById(ids)
+        );
+    }
+
+    async enrichPlaylists(playlists: Playlist[]): Promise<Playlist[]> {
+        return this.enrichEntitiesWithMusicLibrarySource(
+            playlists,
+            (ids) => this.musicLibrarySource.getPlaylistsById(ids)
         );
     }
 

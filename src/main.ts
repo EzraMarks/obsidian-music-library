@@ -5,6 +5,8 @@ import { ObsidianSpotifySettings, DEFAULT_SETTINGS, ObsidianSpotifySettingsTab }
 import { SpotifyAuth } from './auth/spotifyAuth';
 import { TokenManager } from './auth/tokenManager';
 import { SpotifyLibrarySource } from './sync/music-sources/spotify/SpotifyLibrarySource';
+import { FileManager } from './sync/fileManager';
+import { PlaylistSyncService } from './sync/PlaylistSyncService';
 
 /**
  * Main Obsidian Spotify plugin class.
@@ -143,6 +145,50 @@ export default class ObsidianSpotify extends Plugin {
 				await this.syncRecent();
 			}
 		});
+
+		this.addCommand({
+			id: "push-playlist",
+			name: "Push Playlist",
+			callback: async () => {
+				const activeFile = this.app.workspace.getActiveFile();
+				if (!activeFile) {
+					new Notice('No active file');
+					return;
+				}
+
+				const service = this.createPlaylistSyncService();
+				if (!service) return;
+
+				await service.pushPlaylist(activeFile);
+			}
+		});
+
+		this.addCommand({
+			id: "pull-playlist",
+			name: "Pull Playlist",
+			callback: async () => {
+				const activeFile = this.app.workspace.getActiveFile();
+				if (!activeFile) {
+					new Notice('No active file');
+					return;
+				}
+
+				const service = this.createPlaylistSyncService();
+				if (!service) return;
+
+				await service.pullPlaylist(activeFile);
+			}
+		});
+	}
+
+	private createPlaylistSyncService(): PlaylistSyncService | undefined {
+		if (!this.spotifyApi) {
+			new Notice('Please login first');
+			return;
+		}
+		const librarySource = new SpotifyLibrarySource(this.spotifyApi, this.settings);
+		const fileManager = new FileManager(this.app, this.settings, ids => ids && librarySource.getPrimaryId(ids));
+		return new PlaylistSyncService(this.app, librarySource, fileManager);
 	}
 
 	/**
@@ -185,9 +231,6 @@ export default class ObsidianSpotify extends Plugin {
 		});
 	}
 
-	/**
-	 * Performs a full sync of Spotify data.
-	 */
 	async syncAll(): Promise<void> {
 		if (!this.spotifyApi) {
 			new Notice('Please login to Spotify first');

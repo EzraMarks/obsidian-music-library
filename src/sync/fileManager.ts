@@ -4,7 +4,7 @@ import { ObsidianSpotifySettings } from '../settings';
 import { MusicIdIndex } from './MusicIdIndex';
 import { FrontmatterWriter } from './FrontmatterWriter';
 import { FrontmatterReader } from './FrontmatterReader';
-import { Album, Artist, SimplifiedAlbum, SimplifiedArtist, Track } from "./types";
+import { Album, Artist, MusicIds, Playlist, SimplifiedAlbum, SimplifiedArtist, Track } from "./types";
 import { MusicEntity, MusicFile } from './types';
 
 export class FileManager {
@@ -13,14 +13,18 @@ export class FileManager {
 
     constructor(
         private app: App,
-        private settings: ObsidianSpotifySettings
+        private settings: ObsidianSpotifySettings,
+        private getPrimaryId: (ids: MusicIds | undefined) => string | undefined
     ) {
         this.frontmatterReader = new FrontmatterReader(this.app);
         this.frontmatterWriter = new FrontmatterWriter(
             this.app,
             this.settings,
             (artist) => this.generateArtistLink(artist),
-            (album) => this.generateAlbumLink(album)
+            (album) => this.generateAlbumLink(album),
+            (ids) => this.generateTrackLink(ids),
+            getPrimaryId,
+            (link) => this.frontmatterReader.resolveWikiLinkToIds(link)
         );
     }
 
@@ -34,6 +38,10 @@ export class FileManager {
 
     get tracksPath(): string {
         return `${this.settings.music_catalog_base_path}/${this.settings.tracks_path}`;
+    }
+
+    get playlistsPath(): string {
+        return `${this.settings.music_catalog_base_path}/${this.settings.playlists_path}`;
     }
 
     async ensureDirectoryExists(path: string): Promise<void> {
@@ -78,6 +86,17 @@ export class FileManager {
         return this.trackIndex;
     }
 
+    private playlistIndex?: MusicIdIndex<MusicFile<Playlist>>;
+    async getPlaylistIndex(): Promise<MusicIdIndex<MusicFile<Playlist>>> {
+        if (!this.playlistIndex) {
+            this.playlistIndex = await this.buildIndex(
+                this.playlistsPath,
+                file => this.frontmatterReader.parsePlaylistFile(file)
+            );
+        }
+        return this.playlistIndex;
+    }
+
     private async buildIndex<T extends MusicEntity>(
         folderPath: string,
         parseFile: (file: TFile) => MusicFile<T> | undefined
@@ -118,6 +137,13 @@ export class FileManager {
         await this.frontmatterWriter.updateTrackFrontmatter(track);
     }
 
+    async updatePlaylistFile(playlist: MusicFile<Playlist>): Promise<void> {
+        const index = await this.getPlaylistIndex();
+        index.set(playlist.ids, playlist);
+
+        await this.frontmatterWriter.updatePlaylistFrontmatter(playlist);
+    }
+
     async createArtistFile(artist: Artist): Promise<void> {
         const fileName = this.buildSafeFileName(artist.title);
 
@@ -126,7 +152,7 @@ export class FileManager {
             this.artistsPath
         );
 
-        this.updateArtistFile({ file, ...artist });
+        await this.updateArtistFile({ file, ...artist });
     }
 
     async createAlbumFile(album: Album): Promise<void> {
@@ -138,7 +164,7 @@ export class FileManager {
             this.albumsPath
         );
 
-        this.updateAlbumFile({ file, ...album });
+        await this.updateAlbumFile({ file, ...album });
     }
 
     async createTrackFile(track: Track): Promise<void> {
@@ -150,7 +176,18 @@ export class FileManager {
             this.tracksPath
         );
 
-        this.updateTrackFile({ file, ...track });
+        await this.updateTrackFile({ file, ...track });
+    }
+
+    async createPlaylistFile(playlist: Playlist): Promise<void> {
+        const fileName = this.buildSafeFileName(playlist.title);
+
+        const file = await this.createFile(
+            fileName,
+            this.playlistsPath
+        );
+
+        await this.updatePlaylistFile({ file, ...playlist });
     }
 
     async createFile(
@@ -183,6 +220,13 @@ export class FileManager {
                 .trim()
             )
             .join(' - ');
+    }
+
+    async generateTrackLink(ids: MusicIds): Promise<string | undefined> {
+        const index = await this.getTrackIndex();
+        const trackFile = index.get(ids);
+        if (!trackFile) return undefined;
+        return this.generateEntityLink(trackFile, trackFile.title);
     }
 
     private async generateArtistLink(artist: SimplifiedArtist): Promise<string> {

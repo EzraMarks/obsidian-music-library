@@ -1,7 +1,7 @@
 import { App, Notice } from 'obsidian';
 import { ObsidianSpotifySettings } from '../settings';
-import { FileManager } from './FileManager';
-import { MusicFile, MusicEntity, Artist, Album, Track } from './types';
+import { FileManager } from './fileManager';
+import { MusicFile, MusicEntity, Artist, Album, Playlist, Track } from './types';
 import { MusicLibrarySource } from './music-sources/MusicLibrarySource';
 import { MusicIdIndex } from './MusicIdIndex';
 import { MusicMetadataEnricher } from './MusicMetadataEnricher';
@@ -18,7 +18,11 @@ export class SyncEngine {
         private musicLibrarySource: MusicLibrarySource
     ) {
 
-        this.fileManager = new FileManager(this.app, this.settings);
+        this.fileManager = new FileManager(
+            this.app,
+            this.settings,
+            ids => ids && this.musicLibrarySource.getPrimaryId(ids)
+        );
         this.metadataEnricher = new MusicMetadataEnricher(
             this.app,
             this.settings,
@@ -33,26 +37,31 @@ export class SyncEngine {
             await this.fileManager.ensureDirectoryExists(this.fileManager.artistsPath);
             await this.fileManager.ensureDirectoryExists(this.fileManager.albumsPath);
             await this.fileManager.ensureDirectoryExists(this.fileManager.tracksPath);
+            await this.fileManager.ensureDirectoryExists(this.fileManager.playlistsPath);
 
             // Freshen existing files
             const artistFiles = await this.freshenArtists();
             const albumFiles = await this.freshenAlbums();
             const trackFiles = await this.freshenTracks();
+            const playlistFiles = await this.freshenPlaylists();
 
             // Fetch all library entities (music saved in streaming service or local library)
             const savedArtists = await this.musicLibrarySource.getSavedArtists({});
             const savedAlbums = await this.musicLibrarySource.getSavedAlbums({});
             const savedTracks = await this.musicLibrarySource.getSavedTracks({});
+            const savedPlaylists = await this.musicLibrarySource.getSavedPlaylists({});
 
             // Ingest new entities
             await this.ingestNewArtists(savedArtists);
             await this.ingestNewAlbums(savedAlbums);
             await this.ingestNewTracks(savedTracks);
+            await this.ingestNewPlaylists(savedPlaylists);
 
             // Update the library status of all files
             await this.updateLibraryStatus(savedArtists, artistFiles);
             await this.updateLibraryStatus(savedAlbums, albumFiles);
             await this.updateLibraryStatus(savedTracks, trackFiles);
+            await this.updateLibraryStatus(savedPlaylists, playlistFiles);
 
             new Notice('Full sync completed successfully!');
         } catch (error) {
@@ -68,6 +77,7 @@ export class SyncEngine {
             await this.fileManager.ensureDirectoryExists(this.fileManager.artistsPath);
             await this.fileManager.ensureDirectoryExists(this.fileManager.albumsPath);
             await this.fileManager.ensureDirectoryExists(this.fileManager.tracksPath);
+            await this.fileManager.ensureDirectoryExists(this.fileManager.playlistsPath);
 
             // For efficiency of the incremental sync, we skip any freshening of existing files
 
@@ -75,11 +85,13 @@ export class SyncEngine {
             const savedArtists = await this.musicLibrarySource.getSavedArtists({ recentOnly: true });
             const savedAlbums = await this.musicLibrarySource.getSavedAlbums({ recentOnly: true });
             const savedTracks = await this.musicLibrarySource.getSavedTracks({ recentOnly: true });
+            const savedPlaylists = await this.musicLibrarySource.getSavedPlaylists({ recentOnly: true });
 
             // Only ingest new entities
             await this.ingestNewArtists(savedArtists);
             await this.ingestNewAlbums(savedAlbums);
             await this.ingestNewTracks(savedTracks);
+            await this.ingestNewPlaylists(savedPlaylists);
 
             !silent && new Notice('Incremental sync completed successfully!');
         } catch (error) {
@@ -118,9 +130,19 @@ export class SyncEngine {
         );
     }
 
+    private async freshenPlaylists(): Promise<MusicFile<Playlist>[]> {
+        const index = await this.fileManager.getPlaylistIndex();
+        return await this.freshenFiles(
+            index.values(),
+            entities => this.metadataEnricher.enrichPlaylists(entities),
+            file => this.fileManager.updatePlaylistFile(file),
+            "playlist"
+        );
+    }
+
     private async freshenFiles<T extends MusicEntity>(
         files: MusicFile<T>[],
-        enrichEntities: (unenriched: T[]) => Promise<T[]>,
+        enrichEntities: (unenriched: T[]) => T[] | Promise<T[]>,
         updateFile: (enrichedFile: MusicFile<T>) => Promise<void>,
         entityName: string,
     ): Promise<MusicFile<T>[]> {
@@ -180,12 +202,22 @@ export class SyncEngine {
         );
     }
 
+    private async ingestNewPlaylists(savedEntities: Playlist[]): Promise<void> {
+        await this.ingestNewEntities(
+            savedEntities,
+            () => this.fileManager.getPlaylistIndex(),
+            entities => this.metadataEnricher.enrichPlaylists(entities),
+            entity => this.fileManager.createPlaylistFile(entity),
+            "playlist"
+        );
+    }
+
     private async ingestNewEntities<T extends MusicEntity>(
         savedEntities: T[],
         getExistingIndex: () => Promise<MusicIdIndex<MusicFile<MusicEntity>>>,
-        enrichEntities: (entities: T[]) => Promise<T[]>,
+        enrichEntities: ((entities: T[]) => T[] | Promise<T[]>),
         createFile: (entity: T) => Promise<void>,
-        entityName: string
+        entityName: string,
     ): Promise<void> {
         console.log(`Fetching new ${entityName}s from streaming service...`);
 
@@ -199,10 +231,11 @@ export class SyncEngine {
 
         const enrichedEntities = await enrichEntities(newEntities);
 
-        await Promise.all(enrichedEntities.map(entity => {
+        // Sequential to avoid race conditions
+        for (const entity of enrichedEntities) {
             entity.sources.in_library = true;
-            createFile(entity);
-        }));
+            await createFile(entity);
+        }
     }
 
     /**
@@ -237,7 +270,7 @@ export class SyncEngine {
     ) {
         const savedEntitiesIndex = new MusicIdIndex(savedEntities, entity => entity.ids);
 
-        Promise.all(
+        await Promise.all(
             files.map(file => {
                 file.sources.in_library = savedEntitiesIndex.has(file.ids);
                 this.app.fileManager.processFrontMatter(

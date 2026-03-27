@@ -25,10 +25,6 @@ export class SpotifyUtils {
         return album.tracks.items.map(track => track.name);
     }
 
-    getPlaylistDisplayName(playlistId: string): string {
-        return this.settings.playlist_names[playlistId] || playlistId;
-    }
-
     isSingle(album: Spotify.SimplifiedAlbum | Spotify.Album): boolean {
         return album.total_tracks === 1;
     }
@@ -42,7 +38,4 @@ export class SpotifyUtils {
         return item.type === 'album';
     }
 
-    isPlaylistedTrack(item: Spotify.PlaylistedTrack): item is Spotify.PlaylistedTrack<Spotify.Track> {
-        return item.track.type === 'track';
-    }
 }
