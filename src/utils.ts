@@ -9,6 +9,13 @@ export function removeNullish<T extends Record<string, any>>(obj: T): Partial<T>
     ) as Partial<T>;
 }
 
+/** Decodes HTML entities (e.g. "&#x27;" → "'", "&amp;" → "&"). Spotify returns playlist descriptions HTML-encoded. */
+export function decodeHtmlEntities(text: string): string {
+    const textarea = document.createElement('textarea');
+    textarea.innerHTML = text;
+    return textarea.value;
+}
+
 /** Extracts the display title from a wiki-link: "[[path|Title]]" → "Title", "[[Title]]" → "Title" */
 export function extractWikiLinkTitle(link: string): string {
     return link.match(/\|(.+?)\]\]/)?.[1] ?? link.replace(/^\[\[|\]\]$/g, '');

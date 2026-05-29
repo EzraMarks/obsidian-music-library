@@ -5,6 +5,7 @@ import { SpotifyUtils } from './SpotifyUtils';
 import { Album, Artist, InputPlaylist, Playlist, PlaylistItem, Track, SimplifiedArtist, SimplifiedTrack, SimplifiedAlbum, MusicSources, MusicIds } from "src/sync/types";
 import { moment } from 'obsidian';
 import { ObsidianSpotifySettings } from "src/settings";
+import { decodeHtmlEntities } from "src/utils";
 
 
 export class SpotifyLibrarySource extends MusicLibrarySource {
@@ -308,7 +309,7 @@ export class SpotifyLibrarySource extends MusicLibrarySource {
             title: item.name,
             image: this.utils.getBestImageUrl(item.images),
             ids: this.utils.getSpotifyIds(item),
-            description: item.description || undefined,
+            description: item.description ? decodeHtmlEntities(item.description) : undefined,
             owner: item.owner?.display_name || item.owner?.id,
             isOwner: item.owner?.id === currentUserId,
             music_items: tracks.map(t => ({
